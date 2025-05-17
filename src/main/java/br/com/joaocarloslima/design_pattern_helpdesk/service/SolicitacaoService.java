@@ -1,20 +1,18 @@
 package br.com.joaocarloslima.design_pattern_helpdesk.service;
 
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.LocalTime;
+import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import br.com.joaocarloslima.design_pattern_helpdesk.exception.SolicitacaoInvalidaException;
-import br.com.joaocarloslima.design_pattern_helpdesk.model.Notificacao;
 import br.com.joaocarloslima.design_pattern_helpdesk.model.Solicitacao;
-import br.com.joaocarloslima.design_pattern_helpdesk.model.TipoNotificacao;
-import br.com.joaocarloslima.design_pattern_helpdesk.model.TipoSolicitacao;
-import br.com.joaocarloslima.design_pattern_helpdesk.model.Urgencia;
-import br.com.joaocarloslima.design_pattern_helpdesk.repository.NotificacaoRepository;
+import br.com.joaocarloslima.design_pattern_helpdesk.observer.ObservadorSolicitacao;
 import br.com.joaocarloslima.design_pattern_helpdesk.repository.SolicitacaoRepository;
+import br.com.joaocarloslima.design_pattern_helpdesk.validation.ValidadorDiaUtil;
+import br.com.joaocarloslima.design_pattern_helpdesk.validation.ValidadorFinanceiroHorarioComercial;
+import br.com.joaocarloslima.design_pattern_helpdesk.validation.ValidadorMensagemMinima;
+import br.com.joaocarloslima.design_pattern_helpdesk.validation.ValidadorSolicitacao;
+import br.com.joaocarloslima.design_pattern_helpdesk.validation.ValidadorUrgenciaHorario;
 
 @Service
 public class SolicitacaoService {
@@ -23,57 +21,25 @@ public class SolicitacaoService {
     private SolicitacaoRepository solicitacaoRepository;
 
     @Autowired
-    private NotificacaoRepository notificacaoRepository;
+    private List<ObservadorSolicitacao> observadores;
 
     public void processar(Solicitacao solicitacao) {
 
-        // 🔗 Lógica acoplada (refatore aplicando o Design Pattern Chain of Respondability)
-        
-        // Mensagem deve ter no mínimo 10 caracteres
-        if (solicitacao.getMensagem() == null || solicitacao.getMensagem().length() < 10) {
-            throw new SolicitacaoInvalidaException("Mensagem deve ter no mínimo 10 caracteres");
-        }
-        
-        // Dia útil?
-        // Para testar, altere o dia da semana
-        // Exemplo: hoje = DayOfWeek.SATURDAY;
-        DayOfWeek hoje = LocalDate.now().getDayOfWeek();
-        if (hoje == DayOfWeek.SATURDAY || hoje == DayOfWeek.SUNDAY) {
-            throw new SolicitacaoInvalidaException("Solicitação não pode ser processada em fins de semana");
-        }
+        ValidadorSolicitacao validadorMensagem = new ValidadorMensagemMinima();
+        ValidadorSolicitacao validadorDiaUtil = new ValidadorDiaUtil();
+        ValidadorSolicitacao validadorUrgencia = new ValidadorUrgenciaHorario();
+        ValidadorSolicitacao validadorFinanceiro = new ValidadorFinanceiroHorarioComercial();
 
-        // Horário
-        // Para testar, altere o horário
-        // Exemplo: agora = LocalTime.of(23, 0);
-        LocalTime agora = LocalTime.now();
+        validadorMensagem.setProximo(validadorDiaUtil);
+        validadorDiaUtil.setProximo(validadorUrgencia);
+        validadorUrgencia.setProximo(validadorFinanceiro);
 
-        // Urgência fora do horário → recusa
-        if (solicitacao.getUrgencia() == Urgencia.ALTA &&
-            (agora.isBefore(LocalTime.of(8, 0)) || agora.isAfter(LocalTime.of(22, 0)))) {
-            throw new SolicitacaoInvalidaException("Solicitação de urgência alta não pode ser processada fora do horário");
-        }
-
-        // Financeiro só em horário comercial
-        if (solicitacao.getTipo() == TipoSolicitacao.FINANCEIRO &&
-            (agora.isBefore(LocalTime.of(8, 0)) || agora.isAfter(LocalTime.of(18, 0)))) {
-            throw new SolicitacaoInvalidaException("Solicitação financeira só pode ser processada em horário comercial");
-        }
+        validadorMensagem.validar(solicitacao);
 
         solicitacaoRepository.save(solicitacao);
 
-        // 👀 Lógica acoplada de notificação (refatore aplicando o Design Pattern Observer)
-        Notificacao paraUsuario = Notificacao.builder()
-            .tipo(TipoNotificacao.USUARIO)
-            .mensagem("Solicitação registrada: " + solicitacao.getMensagem())
-            .build();
-
-        notificacaoRepository.save(paraUsuario);
-
-        Notificacao paraLog = Notificacao.builder()
-            .tipo(TipoNotificacao.LOG)
-            .mensagem("Solicitação registrada: " + solicitacao.getMensagem())
-            .build();
-            
-        notificacaoRepository.save(paraLog);
+        for (ObservadorSolicitacao observador : observadores) {
+            observador.notificar(solicitacao);
+        }
     }
 }
